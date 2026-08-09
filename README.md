@@ -48,6 +48,9 @@ Create or edit `config.toml` there:
 interval_seconds = 10
 directory_depth = 2
 show_tab_number = true
+idle_label_mode = "shell"
+idle_shell_separator = " ❯ "
+shorten_home_directory = true
 set_window_title = true
 ```
 
@@ -59,6 +62,16 @@ the next poll. The default fallback is `10` seconds.
 pane is sitting at an idle shell. The default is `1`, so `/home/me/api` displays
 as `api`; `2` displays it as `me/api`. Foreground programs still win, so a pane
 running `vim` or `cargo` is titled `vim` or `cargo`.
+
+`idle_label_mode` controls idle-pane labels. It can be `directory` for `me/api`,
+`shell` for `bash`, or `directory_shell` for `me/api ❯ bash`. It defaults to
+`shell`.
+
+`idle_shell_separator` controls the separator used by `directory_shell`; it
+defaults to ` ❯ `.
+
+`shorten_home_directory` displays paths beneath the current user’s home as
+`~`, such as `~/project/src`. It defaults to `false`.
 
 `show_tab_number` prefixes tab titles with the visual tab index used by
 `prefix+1..9`, such as `1:me/api`. Manual titles keep their text and get the

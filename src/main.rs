@@ -18,6 +18,7 @@ const SYNC_LOCK_STALE_SECS: u64 = 30;
 const DEFAULT_DIRECTORY_DEPTH: usize = 1;
 const MAX_DIRECTORY_DEPTH: usize = 8;
 const LABEL_LIMIT: usize = 40;
+const IDLE_SHELL_SEPARATOR: &str = " ❯ ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
@@ -69,6 +70,32 @@ struct Pane {
     foreground_cwd: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdleLabelMode {
+    Directory,
+    Shell,
+    DirectoryShell,
+}
+
+impl IdleLabelMode {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "directory" => Ok(Self::Directory),
+            "shell" => Ok(Self::Shell),
+            "directory_shell" => Ok(Self::DirectoryShell),
+            _ => bail!("idle_label_mode must be one of: directory, shell, directory_shell"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Directory => "directory",
+            Self::Shell => "shell",
+            Self::DirectoryShell => "directory_shell",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ForegroundProcess {
     name: String,
@@ -87,6 +114,9 @@ struct PluginConfig {
     interval_seconds: u64,
     directory_depth: usize,
     show_tab_number: bool,
+    idle_label_mode: IdleLabelMode,
+    idle_shell_separator: String,
+    shorten_home_directory: bool,
     set_window_title: bool,
 }
 
@@ -95,6 +125,10 @@ struct RawPluginConfig {
     interval_seconds: Option<u64>,
     directory_depth: Option<usize>,
     show_tab_number: Option<bool>,
+    idle_label_mode: Option<String>,
+    idle_shell_separator: Option<String>,
+    shorten_home_directory: Option<bool>,
+    show_idle_shell: Option<bool>,
     set_window_title: Option<bool>,
 }
 
@@ -104,6 +138,9 @@ impl Default for PluginConfig {
             interval_seconds: DEFAULT_INTERVAL_SECS,
             directory_depth: DEFAULT_DIRECTORY_DEPTH,
             show_tab_number: false,
+            idle_label_mode: IdleLabelMode::Shell,
+            idle_shell_separator: IDLE_SHELL_SEPARATOR.to_string(),
+            shorten_home_directory: false,
             set_window_title: true,
         }
     }
@@ -394,6 +431,9 @@ fn status(paths: &Paths) -> Result<()> {
         "event_debounce_ms": EVENT_SYNC_DEBOUNCE_MS,
         "directory_depth": config.directory_depth,
         "show_tab_number": config.show_tab_number,
+        "idle_label_mode": config.idle_label_mode.as_str(),
+        "idle_shell_separator": config.idle_shell_separator,
+        "shorten_home_directory": config.shorten_home_directory,
         "set_window_title": config.set_window_title,
         "config_dir": paths.config_dir,
         "config_file": paths.config_file,
@@ -531,10 +571,20 @@ fn desired_label_for_pane(pane: &Pane, config: &PluginConfig) -> Result<String> 
         .as_deref()
         .or(pane.cwd.as_deref())
         .unwrap_or("/");
-    Ok(sanitize_label(&directory_label(
-        cwd,
-        config.directory_depth,
-    )))
+    let home = if config.shorten_home_directory {
+        home_directory()
+    } else {
+        None
+    };
+    let directory =
+        directory_label_with_home(cwd, config.directory_depth, home.as_deref(), cfg!(windows));
+    let shell = select_idle_shell_process(&processes).map(process_label);
+    Ok(format_idle_shell_label(
+        &directory,
+        shell.as_deref(),
+        config.idle_label_mode,
+        &config.idle_shell_separator,
+    ))
 }
 
 fn format_tab_label(display_number: usize, base_label: &str, config: &PluginConfig) -> String {
@@ -560,6 +610,13 @@ fn select_foreground_process(processes: &[ForegroundProcess]) -> Option<&Foregro
     processes
         .iter()
         .filter(|process| !is_shell_process(process) && !is_internal_helper_process(process))
+        .max_by_key(|process| process_score(process))
+}
+
+fn select_idle_shell_process(processes: &[ForegroundProcess]) -> Option<&ForegroundProcess> {
+    processes
+        .iter()
+        .filter(|process| is_shell_process(process))
         .max_by_key(|process| process_score(process))
 }
 
@@ -631,6 +688,97 @@ fn directory_label(path: &str, depth: usize) -> String {
         let start = parts.len().saturating_sub(depth);
         parts[start..].join("/")
     }
+}
+
+fn directory_label_with_home(
+    path: &str,
+    depth: usize,
+    home: Option<&str>,
+    case_insensitive: bool,
+) -> String {
+    let Some(home) = home else {
+        return directory_label(path, depth);
+    };
+    let Some(relative) = relative_home_path(path, home, case_insensitive) else {
+        return directory_label(path, depth);
+    };
+    if relative.is_empty() {
+        "~".to_string()
+    } else {
+        format!("~/{}", directory_label(&relative, depth))
+    }
+}
+
+fn relative_home_path(path: &str, home: &str, case_insensitive: bool) -> Option<String> {
+    let path = normalize_path_for_comparison(path);
+    let home = normalize_path_for_comparison(home);
+    let prefix = if home == "/" {
+        "/".to_string()
+    } else {
+        format!("{home}/")
+    };
+    let is_home = |candidate: &str, expected: &str| {
+        if case_insensitive {
+            candidate.eq_ignore_ascii_case(expected)
+        } else {
+            candidate == expected
+        }
+    };
+    if is_home(&path, &home) {
+        Some(String::new())
+    } else if is_home_prefix(&path, &prefix, case_insensitive) {
+        Some(path[prefix.len()..].to_string())
+    } else {
+        None
+    }
+}
+
+fn is_home_prefix(path: &str, prefix: &str, case_insensitive: bool) -> bool {
+    if path.len() < prefix.len() {
+        return false;
+    }
+    let candidate = &path[..prefix.len()];
+    if case_insensitive {
+        candidate.eq_ignore_ascii_case(prefix)
+    } else {
+        candidate == prefix
+    }
+}
+
+fn normalize_path_for_comparison(path: &str) -> String {
+    let mut normalized = path.replace('\\', "/");
+    while normalized.ends_with('/') && normalized.len() > 1 {
+        normalized.pop();
+    }
+    normalized
+}
+
+fn home_directory() -> Option<String> {
+    if cfg!(windows) {
+        env::var("USERPROFILE")
+            .ok()
+            .or_else(|| env::var("HOME").ok())
+    } else {
+        env::var("HOME")
+            .ok()
+            .or_else(|| env::var("USERPROFILE").ok())
+    }
+}
+
+fn format_idle_shell_label(
+    directory: &str,
+    shell: Option<&str>,
+    mode: IdleLabelMode,
+    separator: &str,
+) -> String {
+    let label = match (mode, shell) {
+        (IdleLabelMode::Directory, _) | (_, None) => directory.to_string(),
+        (IdleLabelMode::Shell, Some(shell)) => shell.to_string(),
+        (IdleLabelMode::DirectoryShell, Some(shell)) => {
+            format!("{directory}{separator}{shell}")
+        }
+    };
+    sanitize_label(&label)
 }
 
 fn sanitize_label(label: &str) -> String {
@@ -862,6 +1010,21 @@ fn parse_plugin_config(text: &str) -> Result<PluginConfig> {
     }
     if let Some(show_tab_number) = raw.show_tab_number {
         config.show_tab_number = show_tab_number;
+    }
+    if let Some(idle_label_mode) = raw.idle_label_mode {
+        config.idle_label_mode = IdleLabelMode::parse(&idle_label_mode)?;
+    } else if let Some(show_idle_shell) = raw.show_idle_shell {
+        config.idle_label_mode = if show_idle_shell {
+            IdleLabelMode::DirectoryShell
+        } else {
+            IdleLabelMode::Directory
+        };
+    }
+    if let Some(idle_shell_separator) = raw.idle_shell_separator {
+        config.idle_shell_separator = idle_shell_separator;
+    }
+    if let Some(shorten_home_directory) = raw.shorten_home_directory {
+        config.shorten_home_directory = shorten_home_directory;
     }
     if let Some(set_window_title) = raw.set_window_title {
         config.set_window_title = set_window_title;
@@ -1235,6 +1398,12 @@ mod tests {
         assert_eq!(PluginConfig::default().interval_seconds, 10);
         assert_eq!(PluginConfig::default().directory_depth, 1);
         assert!(!PluginConfig::default().show_tab_number);
+        assert_eq!(
+            PluginConfig::default().idle_label_mode,
+            IdleLabelMode::Shell
+        );
+        assert_eq!(PluginConfig::default().idle_shell_separator, " ❯ ");
+        assert!(!PluginConfig::default().shorten_home_directory);
         assert!(PluginConfig::default().set_window_title);
         assert_eq!(parse_plugin_config("").unwrap().directory_depth, 1);
         assert_eq!(
@@ -1275,6 +1444,9 @@ mod tests {
                     interval_seconds: 10,
                     directory_depth: 2,
                     show_tab_number: true,
+                    idle_label_mode: IdleLabelMode::Directory,
+                    idle_shell_separator: " ❯ ".into(),
+                    shorten_home_directory: false,
                     set_window_title: false,
                 },
             ),
@@ -1288,6 +1460,9 @@ mod tests {
                     interval_seconds: 10,
                     directory_depth: 2,
                     show_tab_number: false,
+                    idle_label_mode: IdleLabelMode::Directory,
+                    idle_shell_separator: " ❯ ".into(),
+                    shorten_home_directory: false,
                     set_window_title: false,
                 },
             ),
@@ -1308,6 +1483,27 @@ mod tests {
     }
 
     #[test]
+    fn plugin_config_controls_idle_shell_labels() {
+        let config =
+            parse_plugin_config("idle_label_mode = \"shell\"\nidle_shell_separator = \" › \"")
+                .unwrap();
+        assert_eq!(config.idle_label_mode, IdleLabelMode::Shell);
+        assert_eq!(config.idle_shell_separator, " › ");
+        assert!(
+            parse_plugin_config("shorten_home_directory = true")
+                .unwrap()
+                .shorten_home_directory
+        );
+        assert_eq!(
+            parse_plugin_config("show_idle_shell = false")
+                .unwrap()
+                .idle_label_mode,
+            IdleLabelMode::Directory
+        );
+        assert!(parse_plugin_config("idle_label_mode = \"unknown\"").is_err());
+    }
+
+    #[test]
     fn window_title_uses_herdr_prefix_and_tab_label() {
         let label = "3:herdr-tab-title";
         assert_eq!(window_title_for_tab(label), "Herdr · 3:herdr-tab-title");
@@ -1319,6 +1515,9 @@ mod tests {
             interval_seconds: 10,
             directory_depth: 2,
             show_tab_number: true,
+            idle_label_mode: IdleLabelMode::Directory,
+            idle_shell_separator: " ❯ ".into(),
+            shorten_home_directory: false,
             set_window_title: false,
         };
         let manual = Tab {
@@ -1351,6 +1550,47 @@ mod tests {
     }
 
     #[test]
+    fn idle_shell_label_combines_directory_and_shell() {
+        assert_eq!(
+            format_idle_shell_label(
+                "me/project",
+                Some("bash"),
+                IdleLabelMode::DirectoryShell,
+                " ❯ ",
+            ),
+            "me/project ❯ bash"
+        );
+        assert_eq!(
+            format_idle_shell_label("project", Some("bash"), IdleLabelMode::Directory, " ❯ "),
+            "project"
+        );
+        assert_eq!(
+            format_idle_shell_label("project", Some("bash"), IdleLabelMode::Shell, " ❯ "),
+            "bash"
+        );
+        assert_eq!(
+            format_idle_shell_label("project", None, IdleLabelMode::DirectoryShell, " ❯ "),
+            "project"
+        );
+    }
+
+    #[test]
+    fn directory_label_can_shorten_home_path() {
+        assert_eq!(
+            directory_label_with_home("/home/me/project/src", 2, Some("/home/me"), false,),
+            "~/project/src"
+        );
+        assert_eq!(
+            directory_label_with_home("/home/medium/project", 2, Some("/home/me"), false),
+            "medium/project"
+        );
+        assert_eq!(
+            directory_label_with_home("C:\\Users\\Me\\project", 2, Some("c:/users/me"), true),
+            "~/project"
+        );
+    }
+
+    #[test]
     fn shell_processes_are_idle_sources() {
         assert!(is_shell_process(&process("bash", Some("bash"), &["bash"])));
         assert!(is_shell_process(&process("zsh", None, &["/bin/zsh"])));
@@ -1370,6 +1610,18 @@ mod tests {
         assert_eq!(
             select_foreground_process(&processes).map(process_label),
             Some("cargo".to_string())
+        );
+    }
+
+    #[test]
+    fn select_idle_shell_process_finds_shell() {
+        let processes = vec![
+            process("bash", None, &["bash"]),
+            process("cargo", None, &["cargo", "test"]),
+        ];
+        assert_eq!(
+            select_idle_shell_process(&processes).map(process_label),
+            Some("bash".to_string())
         );
     }
 
