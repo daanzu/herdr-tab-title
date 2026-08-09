@@ -48,6 +48,7 @@ Create or edit `config.toml` there:
 interval_seconds = 10
 directory_depth = 2
 show_tab_number = true
+set_window_title = true
 ```
 
 `interval_seconds` controls the fallback poll. Normal workspace, tab, and pane
@@ -62,6 +63,9 @@ running `vim` or `cargo` is titled `vim` or `cargo`.
 `show_tab_number` prefixes tab titles with the visual tab index used by
 `prefix+1..9`, such as `1:me/api`. Manual titles keep their text and get the
 same prefix. It defaults to `false`.
+
+`set_window_title` updates the title of the foreground terminal client to
+`Herdr · <focused tab label>` through Herdr's CLI. It defaults to `true`.
 
 ## Actions
 

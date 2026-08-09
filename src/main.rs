@@ -87,6 +87,7 @@ struct PluginConfig {
     interval_seconds: u64,
     directory_depth: usize,
     show_tab_number: bool,
+    set_window_title: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -94,6 +95,7 @@ struct RawPluginConfig {
     interval_seconds: Option<u64>,
     directory_depth: Option<usize>,
     show_tab_number: Option<bool>,
+    set_window_title: Option<bool>,
 }
 
 impl Default for PluginConfig {
@@ -102,6 +104,7 @@ impl Default for PluginConfig {
             interval_seconds: DEFAULT_INTERVAL_SECS,
             directory_depth: DEFAULT_DIRECTORY_DEPTH,
             show_tab_number: false,
+            set_window_title: true,
         }
     }
 }
@@ -391,6 +394,7 @@ fn status(paths: &Paths) -> Result<()> {
         "event_debounce_ms": EVENT_SYNC_DEBOUNCE_MS,
         "directory_depth": config.directory_depth,
         "show_tab_number": config.show_tab_number,
+        "set_window_title": config.set_window_title,
         "config_dir": paths.config_dir,
         "config_file": paths.config_file,
         "state_dir": paths.state_dir,
@@ -413,7 +417,11 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
         .retain(|tab_id, _| observed_tab_ids.contains(tab_id));
 
     let mut changed = 0;
+    let mut focused_tab_label = None;
     for tab in tabs {
+        if tab.focused {
+            focused_tab_label = Some(tab.label.clone());
+        }
         let Some(tab_panes) = panes_by_tab.get(&tab.tab_id) else {
             continue;
         };
@@ -423,6 +431,9 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
             if let Some(desired) = desired_label_for_manual_tab(&tab, &config) {
                 rename_tab(&tab.tab_id, &desired)
                     .with_context(|| format!("rename manual tab {} to {desired:?}", tab.tab_id))?;
+                if tab.focused {
+                    focused_tab_label = Some(desired);
+                }
                 changed += 1;
             }
             continue;
@@ -439,7 +450,18 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
                 .with_context(|| format!("rename tab {} to {desired:?}", tab.tab_id))?;
             changed += 1;
         }
+        if tab.focused {
+            focused_tab_label = Some(desired.clone());
+        }
         state.labels.insert(tab.tab_id.clone(), desired);
+    }
+
+    if config.set_window_title {
+        if let Some(label) = focused_tab_label {
+            if let Err(err) = set_window_title(&label) {
+                eprintln!("herdr-tab-title: set window title: {err:#}");
+            }
+        }
     }
 
     Ok(changed)
@@ -742,6 +764,16 @@ fn rename_tab(tab_id: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn set_window_title(tab_label: &str) -> Result<()> {
+    let title = window_title_for_tab(tab_label);
+    let _ = herdr_json(&["terminal", "title", "set", &title])?;
+    Ok(())
+}
+
+fn window_title_for_tab(tab_label: &str) -> String {
+    format!("Herdr · {tab_label}")
+}
+
 fn herdr_json(args: &[&str]) -> Result<Value> {
     let herdr = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| OsString::from("herdr"));
     let output = Command::new(&herdr)
@@ -830,6 +862,9 @@ fn parse_plugin_config(text: &str) -> Result<PluginConfig> {
     }
     if let Some(show_tab_number) = raw.show_tab_number {
         config.show_tab_number = show_tab_number;
+    }
+    if let Some(set_window_title) = raw.set_window_title {
+        config.set_window_title = set_window_title;
     }
     Ok(config)
 }
@@ -1200,6 +1235,7 @@ mod tests {
         assert_eq!(PluginConfig::default().interval_seconds, 10);
         assert_eq!(PluginConfig::default().directory_depth, 1);
         assert!(!PluginConfig::default().show_tab_number);
+        assert!(PluginConfig::default().set_window_title);
         assert_eq!(parse_plugin_config("").unwrap().directory_depth, 1);
         assert_eq!(
             parse_plugin_config("directory_depth = 2")
@@ -1239,6 +1275,7 @@ mod tests {
                     interval_seconds: 10,
                     directory_depth: 2,
                     show_tab_number: true,
+                    set_window_title: false,
                 },
             ),
             "3:me/project"
@@ -1251,6 +1288,7 @@ mod tests {
                     interval_seconds: 10,
                     directory_depth: 2,
                     show_tab_number: false,
+                    set_window_title: false,
                 },
             ),
             "me/project"
@@ -1261,11 +1299,27 @@ mod tests {
     }
 
     #[test]
+    fn plugin_config_controls_window_title() {
+        assert!(
+            parse_plugin_config("set_window_title = true")
+                .unwrap()
+                .set_window_title
+        );
+    }
+
+    #[test]
+    fn window_title_uses_herdr_prefix_and_tab_label() {
+        let label = "3:herdr-tab-title";
+        assert_eq!(window_title_for_tab(label), "Herdr · 3:herdr-tab-title");
+    }
+
+    #[test]
     fn manual_titles_keep_text_but_get_visual_tab_number() {
         let config = PluginConfig {
             interval_seconds: 10,
             directory_depth: 2,
             show_tab_number: true,
+            set_window_title: false,
         };
         let manual = Tab {
             tab_id: "w1:t2".into(),
