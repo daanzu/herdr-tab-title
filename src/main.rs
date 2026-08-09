@@ -1091,6 +1091,29 @@ fn process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+
+    let filter = format!("PID eq {pid}");
+    Command::new("tasklist")
+        .args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
+        .creation_flags(0x0800_0000)
+        .output()
+        .map(|output| output.status.success() && tasklist_contains_pid(&output.stdout, pid))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn tasklist_contains_pid(output: &[u8], pid: u32) -> bool {
+    String::from_utf8_lossy(output).lines().any(|line| {
+        line.split(',')
+            .nth(1)
+            .and_then(|value| value.trim().trim_matches('"').parse::<u32>().ok())
+            == Some(pid)
+    })
+}
+
 #[cfg(unix)]
 fn terminate_process(pid: u32) -> Result<()> {
     let rc = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
@@ -1098,6 +1121,26 @@ fn terminate_process(pid: u32) -> Result<()> {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error()).with_context(|| format!("terminate pid {pid}"))
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process(pid: u32) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    let pid_arg = pid.to_string();
+    let output = Command::new("taskkill")
+        .args(["/PID", pid_arg.as_str(), "/T", "/F"])
+        .creation_flags(0x0800_0000)
+        .output()
+        .with_context(|| format!("terminate pid {pid}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        bail!(
+            "taskkill failed for pid {pid}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
     }
 }
 
@@ -1112,6 +1155,17 @@ fn detach_command(command: &mut Command) {
             Ok(())
         });
     }
+}
+
+#[cfg(windows)]
+fn detach_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // Do not create a console for the long-lived watcher, and put it in its
+    // own process group so it is independent of the plugin action process.
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 #[cfg(test)]

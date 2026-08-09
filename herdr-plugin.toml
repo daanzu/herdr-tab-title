@@ -1,13 +1,17 @@
-id = "aarsh21.tab-title"
+id = "daanzu.tab-title"
 name = "Tab Title"
-version = "0.1.6"
+version = "0.1.7"
 min_herdr_version = "0.7.3"
 description = "Automatic tmux-like Herdr tab titles from the focused pane's process or directory"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 [[build]]
 command = ["sh", "scripts/install-binary.sh"]
 platforms = ["linux", "macos"]
+
+[[build]]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/install-binary.ps1"]
+platforms = ["windows"]
 
 [[actions]]
 id = "start"
@@ -17,11 +21,25 @@ command = ["bin/herdr-tab-title", "start"]
 platforms = ["linux", "macos"]
 
 [[actions]]
+id = "start-windows"
+title = "Start tab title watcher"
+contexts = ["workspace"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'start'"]
+platforms = ["windows"]
+
+[[actions]]
 id = "stop"
 title = "Stop tab title watcher"
 contexts = ["workspace"]
 command = ["bin/herdr-tab-title", "stop"]
 platforms = ["linux", "macos"]
+
+[[actions]]
+id = "stop-windows"
+title = "Stop tab title watcher"
+contexts = ["workspace"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'stop'"]
+platforms = ["windows"]
 
 [[actions]]
 id = "status"
@@ -31,11 +49,25 @@ command = ["bin/herdr-tab-title", "status"]
 platforms = ["linux", "macos"]
 
 [[actions]]
+id = "status-windows"
+title = "Show tab title watcher status"
+contexts = ["workspace"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'status'"]
+platforms = ["windows"]
+
+[[actions]]
 id = "sync"
 title = "Sync tab titles once"
 contexts = ["workspace"]
 command = ["bin/herdr-tab-title", "sync"]
 platforms = ["linux", "macos"]
+
+[[actions]]
+id = "sync-windows"
+title = "Sync tab titles once"
+contexts = ["workspace"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'sync'"]
+platforms = ["windows"]
 
 [[events]]
 on = "workspace.created"
@@ -43,9 +75,19 @@ command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
 
 [[events]]
+on = "workspace.created"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
+
+[[events]]
 on = "workspace.focused"
 command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
+
+[[events]]
+on = "workspace.focused"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
 
 [[events]]
 on = "tab.created"
@@ -53,9 +95,19 @@ command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
 
 [[events]]
+on = "tab.created"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
+
+[[events]]
 on = "tab.focused"
 command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
+
+[[events]]
+on = "tab.focused"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
 
 [[events]]
 on = "tab.moved"
@@ -63,9 +115,19 @@ command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
 
 [[events]]
+on = "tab.moved"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
+
+[[events]]
 on = "pane.created"
 command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
+
+[[events]]
+on = "pane.created"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
 
 [[events]]
 on = "pane.focused"
@@ -73,11 +135,26 @@ command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
 
 [[events]]
+on = "pane.focused"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
+
+[[events]]
 on = "pane.moved"
 command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
 
 [[events]]
+on = "pane.moved"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]
+
+[[events]]
 on = "pane.exited"
 command = ["bin/herdr-tab-title", "autostart"]
 platforms = ["linux", "macos"]
+
+[[events]]
+on = "pane.exited"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'bin/herdr-tab-title.exe') 'autostart'"]
+platforms = ["windows"]

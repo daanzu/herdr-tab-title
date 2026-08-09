@@ -4,7 +4,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BIN_DIR="$ROOT/bin"
 BIN="$BIN_DIR/herdr-tab-title"
-REPO=${HERDR_TAB_TITLE_REPO:-aarsh21/herdr-tab-title}
+REPO=${HERDR_TAB_TITLE_REPO:-daanzu/herdr-tab-title}
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/herdr-plugin.toml" | head -n 1)
 
 mkdir -p "$BIN_DIR"

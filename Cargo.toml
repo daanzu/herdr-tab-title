@@ -1,14 +1,16 @@
 [package]
 name = "herdr-tab-title"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Automatic tmux-like tab titles for Herdr"
 license = "MIT"
-repository = "https://github.com/aarsh21/herdr-tab-title"
+repository = "https://github.com/daanzu/herdr-tab-title"
 
 [dependencies]
 anyhow = "1.0"
-libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

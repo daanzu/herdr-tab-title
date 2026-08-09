@@ -12,9 +12,13 @@ It uses only public Herdr plugin and CLI APIs. It does not patch Herdr.
 ## Install
 
 ```bash
-herdr plugin install aarsh21/herdr-tab-title
-herdr plugin action invoke aarsh21.tab-title.start
+herdr plugin install daanzu/herdr-tab-title
+herdr plugin action invoke daanzu.tab-title.start
 ```
+
+On Windows, invoke `daanzu.tab-title.start-windows` instead. Windows uses
+PowerShell launchers because Herdr does not reliably run relative executable
+paths from action processes.
 
 To stop Herdr asking for a tab name before each new tab, set this in
 `~/.config/herdr/config.toml`:
@@ -35,7 +39,7 @@ herdr server reload-config
 Plugin configuration lives in the directory printed by:
 
 ```bash
-herdr plugin config-dir aarsh21.tab-title
+herdr plugin config-dir daanzu.tab-title
 ```
 
 Create or edit `config.toml` there:
@@ -62,11 +66,14 @@ same prefix. It defaults to `false`.
 ## Actions
 
 ```bash
-herdr plugin action invoke aarsh21.tab-title.start
-herdr plugin action invoke aarsh21.tab-title.stop
-herdr plugin action invoke aarsh21.tab-title.status
-herdr plugin action invoke aarsh21.tab-title.sync
+herdr plugin action invoke daanzu.tab-title.start
+herdr plugin action invoke daanzu.tab-title.stop
+herdr plugin action invoke daanzu.tab-title.status
+herdr plugin action invoke daanzu.tab-title.sync
 ```
+
+Windows exposes the same actions with `-windows` suffixes, for example:
+`daanzu.tab-title.start-windows`.
 
 The watcher refreshes titles immediately from normal workspace, tab, and pane
 events, with a 250ms debounce for event bursts. It also runs a fallback refresh
@@ -85,15 +92,31 @@ bin/herdr-tab-title sync --force
 bin/herdr-tab-title start --force
 ```
 
+On Windows, use `bin\herdr-tab-title.exe` instead.
+
 ## Development
+
+On Linux and macOS:
 
 ```bash
 cargo test
 cargo build --release
 herdr plugin link .
-herdr plugin action invoke aarsh21.tab-title.start
+herdr plugin action invoke daanzu.tab-title.start
 ```
 
-Local `plugin link` does not run build steps. Run `cargo build --release` and
-copy the binary to `bin/herdr-tab-title`, or run `scripts/install-binary.sh`,
-before linking.
+On Windows, use PowerShell:
+
+```powershell
+cargo test
+cargo build --release
+New-Item -ItemType Directory -Force bin
+Copy-Item target/release/herdr-tab-title.exe bin/herdr-tab-title.exe
+herdr plugin link .
+herdr plugin action invoke daanzu.tab-title.start-windows
+```
+
+Local `plugin link` does not run build steps. Run the platform-specific build
+script (`scripts/install-binary.sh` or `scripts/install-binary.ps1`) before
+linking, or build and copy the binary manually as above. Windows releases use
+`herdr-tab-title-x86_64-pc-windows-msvc.exe`.
