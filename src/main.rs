@@ -629,15 +629,23 @@ fn process_score(process: &ForegroundProcess) -> u8 {
 }
 
 fn process_label(process: &ForegroundProcess) -> String {
-    process
+    let label = process
         .argv0
         .as_deref()
         .or_else(|| process.argv.first().map(String::as_str))
         .unwrap_or(&process.name)
         .rsplit(['/', '\\'])
         .find(|part| !part.is_empty())
-        .unwrap_or(&process.name)
-        .to_string()
+        .unwrap_or(&process.name);
+    strip_windows_exe_suffix(label, cfg!(windows)).to_string()
+}
+
+fn strip_windows_exe_suffix(label: &str, is_windows: bool) -> &str {
+    if is_windows && label.len() >= 4 && label[label.len() - 4..].eq_ignore_ascii_case(".exe") {
+        &label[..label.len() - 4]
+    } else {
+        label
+    }
 }
 
 fn is_shell_process(process: &ForegroundProcess) -> bool {
@@ -1549,6 +1557,13 @@ mod tests {
     fn process_label_prefers_executable_basename() {
         let p = process("python3", Some("/usr/bin/python3"), &["python3", "app.py"]);
         assert_eq!(process_label(&p), "python3");
+    }
+
+    #[test]
+    fn process_label_strips_exe_suffix_only_on_windows() {
+        assert_eq!(strip_windows_exe_suffix("pwsh.exe", true), "pwsh");
+        assert_eq!(strip_windows_exe_suffix("PWSh.EXE", true), "PWSh");
+        assert_eq!(strip_windows_exe_suffix("pwsh.exe", false), "pwsh.exe");
     }
 
     #[test]
