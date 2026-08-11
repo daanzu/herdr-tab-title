@@ -498,9 +498,8 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
 
     if config.set_window_title {
         if let Some(label) = focused_tab_label {
-            if let Err(err) = set_window_title(&label) {
-                eprintln!("herdr-tab-title: set window title: {err:#}");
-            }
+            set_window_title(&label)
+                .with_context(|| format!("set window title for tab label {label:?}"))?;
         }
     }
 
@@ -914,7 +913,10 @@ fn rename_tab(tab_id: &str, label: &str) -> Result<()> {
 
 fn set_window_title(tab_label: &str) -> Result<()> {
     let title = window_title_for_tab(tab_label);
-    let _ = herdr_json(&["terminal", "title", "set", &title])?;
+    let response = herdr_json(&["terminal", "title", "set", &title])?;
+    if response.pointer("/result/reason").and_then(Value::as_str) == Some("no_foreground_client") {
+        bail!("Herdr has no foreground terminal client to receive the title");
+    }
     Ok(())
 }
 
