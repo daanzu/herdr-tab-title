@@ -69,6 +69,7 @@ struct Pane {
     cwd: Option<String>,
     foreground_cwd: Option<String>,
     agent: Option<String>,
+    internal_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +144,7 @@ struct PluginConfig {
     idle_shell_separator: String,
     shorten_home_directory: bool,
     set_window_title: bool,
+    append_internal_tab_title: bool,
     windows_process_detection: bool,
     windows_agent_detection: bool,
 }
@@ -157,6 +159,7 @@ struct RawPluginConfig {
     shorten_home_directory: Option<bool>,
     show_idle_shell: Option<bool>,
     set_window_title: Option<bool>,
+    append_internal_tab_title: Option<bool>,
     windows_process_detection: Option<bool>,
     windows_agent_detection: Option<bool>,
 }
@@ -171,6 +174,7 @@ impl Default for PluginConfig {
             idle_shell_separator: IDLE_SHELL_SEPARATOR.to_string(),
             shorten_home_directory: false,
             set_window_title: true,
+            append_internal_tab_title: true,
             windows_process_detection: true,
             windows_agent_detection: true,
         }
@@ -466,6 +470,7 @@ fn status(paths: &Paths) -> Result<()> {
         "idle_shell_separator": config.idle_shell_separator,
         "shorten_home_directory": config.shorten_home_directory,
         "set_window_title": config.set_window_title,
+        "append_internal_tab_title": config.append_internal_tab_title,
         "windows_process_detection": config.windows_process_detection,
         "windows_agent_detection": config.windows_agent_detection,
         "config_dir": paths.config_dir,
@@ -499,6 +504,7 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
 
     let mut changed = 0;
     let mut focused_tab_label = None;
+    let mut focused_internal_title = None;
     for tab in tabs {
         if tab.focused {
             focused_tab_label = Some(tab.label.clone());
@@ -507,6 +513,14 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
             continue;
         };
         let manage = should_manage_tab(&tab, state, force);
+        let source_pane = if manage || tab.focused {
+            select_tab_source_pane(&tab, tab_panes)?
+        } else {
+            None
+        };
+        if tab.focused {
+            focused_internal_title = source_pane.and_then(|pane| pane.internal_title.clone());
+        }
         if !manage {
             state.labels.remove(&tab.tab_id);
             if let Some(desired) = desired_label_for_manual_tab(&tab, config) {
@@ -519,7 +533,7 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
             }
             continue;
         }
-        let Some(source_pane) = select_tab_source_pane(&tab, tab_panes)? else {
+        let Some(source_pane) = source_pane else {
             continue;
         };
         let desired = desired_label_for_tab(&tab, source_pane, config, &process_snapshot)?;
@@ -539,8 +553,12 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
 
     if config.set_window_title {
         if let Some(label) = focused_tab_label {
-            set_window_title(&label)
-                .with_context(|| format!("set window title for tab label {label:?}"))?;
+            set_window_title(
+                &label,
+                focused_internal_title.as_deref(),
+                config.append_internal_tab_title,
+            )
+            .with_context(|| format!("set window title for tab label {label:?}"))?;
         }
     }
 
@@ -1114,6 +1132,8 @@ fn list_panes() -> Result<Vec<Pane>> {
                 cwd: optional_string(pane, "cwd"),
                 foreground_cwd: optional_string(pane, "foreground_cwd"),
                 agent: optional_string(pane, "agent"),
+                internal_title: optional_string(pane, "terminal_title_stripped")
+                    .or_else(|| optional_string(pane, "terminal_title")),
             })
         })
         .collect()
@@ -1170,8 +1190,12 @@ fn rename_tab(tab_id: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn set_window_title(tab_label: &str) -> Result<()> {
-    let title = window_title_for_tab(tab_label);
+fn set_window_title(
+    tab_label: &str,
+    internal_tab_title: Option<&str>,
+    append_internal_tab_title: bool,
+) -> Result<()> {
+    let title = window_title_for_tab(tab_label, internal_tab_title, append_internal_tab_title);
     let response = herdr_json(&["terminal", "title", "set", &title])?;
     if response.pointer("/result/reason").and_then(Value::as_str) == Some("no_foreground_client") {
         bail!("Herdr has no foreground terminal client to receive the title");
@@ -1179,8 +1203,22 @@ fn set_window_title(tab_label: &str) -> Result<()> {
     Ok(())
 }
 
-fn window_title_for_tab(tab_label: &str) -> String {
-    format!("Herdr · {tab_label}")
+fn window_title_for_tab(
+    tab_label: &str,
+    internal_tab_title: Option<&str>,
+    append_internal_tab_title: bool,
+) -> String {
+    let mut title = format!("Herdr · {tab_label}");
+    if append_internal_tab_title {
+        if let Some(internal_title) = internal_tab_title
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        {
+            title.push_str(" · ");
+            title.push_str(internal_title);
+        }
+    }
+    title
 }
 
 fn herdr_json(args: &[&str]) -> Result<Value> {
@@ -1289,6 +1327,9 @@ fn parse_plugin_config(text: &str) -> Result<PluginConfig> {
     }
     if let Some(set_window_title) = raw.set_window_title {
         config.set_window_title = set_window_title;
+    }
+    if let Some(append_internal_tab_title) = raw.append_internal_tab_title {
+        config.append_internal_tab_title = append_internal_tab_title;
     }
     if let Some(windows_process_detection) = raw.windows_process_detection {
         config.windows_process_detection = windows_process_detection;
@@ -1672,6 +1713,7 @@ mod tests {
         assert_eq!(PluginConfig::default().idle_shell_separator, " ❯ ");
         assert!(!PluginConfig::default().shorten_home_directory);
         assert!(PluginConfig::default().set_window_title);
+        assert!(PluginConfig::default().append_internal_tab_title);
         assert!(PluginConfig::default().windows_process_detection);
         assert!(PluginConfig::default().windows_agent_detection);
         assert_eq!(parse_plugin_config("").unwrap().directory_depth, 1);
@@ -1717,6 +1759,7 @@ mod tests {
                     idle_shell_separator: " ❯ ".into(),
                     shorten_home_directory: false,
                     set_window_title: false,
+                    append_internal_tab_title: true,
                     windows_process_detection: true,
                     windows_agent_detection: true,
                 },
@@ -1735,6 +1778,7 @@ mod tests {
                     idle_shell_separator: " ❯ ".into(),
                     shorten_home_directory: false,
                     set_window_title: false,
+                    append_internal_tab_title: true,
                     windows_process_detection: true,
                     windows_agent_detection: true,
                 },
@@ -1752,6 +1796,11 @@ mod tests {
             parse_plugin_config("set_window_title = true")
                 .unwrap()
                 .set_window_title
+        );
+        assert!(
+            !parse_plugin_config("append_internal_tab_title = false")
+                .unwrap()
+                .append_internal_tab_title
         );
         assert!(
             !parse_plugin_config("windows_process_detection = false")
@@ -1787,9 +1836,20 @@ mod tests {
     }
 
     #[test]
-    fn window_title_uses_herdr_prefix_and_tab_label() {
+    fn window_title_uses_tab_label_and_optional_internal_title() {
         let label = "3:herdr-tab-title";
-        assert_eq!(window_title_for_tab(label), "Herdr · 3:herdr-tab-title");
+        assert_eq!(
+            window_title_for_tab(label, Some("π - herdr-tab-title"), true),
+            "Herdr · 3:herdr-tab-title · π - herdr-tab-title"
+        );
+        assert_eq!(
+            window_title_for_tab(label, Some("π - herdr-tab-title"), false),
+            "Herdr · 3:herdr-tab-title"
+        );
+        assert_eq!(
+            window_title_for_tab(label, Some("  "), true),
+            "Herdr · 3:herdr-tab-title"
+        );
     }
 
     #[test]
@@ -1802,6 +1862,7 @@ mod tests {
             idle_shell_separator: " ❯ ".into(),
             shorten_home_directory: false,
             set_window_title: false,
+            append_internal_tab_title: true,
             windows_process_detection: true,
             windows_agent_detection: true,
         };
@@ -2095,6 +2156,7 @@ mod tests {
                 cwd: None,
                 foreground_cwd: None,
                 agent: None,
+                internal_title: None,
             },
             Pane {
                 pane_id: "w1:p1".into(),
@@ -2103,6 +2165,7 @@ mod tests {
                 cwd: None,
                 foreground_cwd: None,
                 agent: None,
+                internal_title: None,
             },
         ];
         let grouped = group_panes_by_tab(panes);

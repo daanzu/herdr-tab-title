@@ -52,6 +52,7 @@ idle_label_mode = "shell"
 idle_shell_separator = " ❯ "
 shorten_home_directory = true
 set_window_title = true
+append_internal_tab_title = true
 windows_process_detection = true
 windows_agent_detection = true
 ```
@@ -79,8 +80,11 @@ defaults to ` ❯ `.
 `prefix+1..9`, such as `1:me/api`. Manual titles keep their text and get the
 same prefix. It defaults to `true`.
 
-`set_window_title` updates the title of the foreground terminal client to
-`Herdr · <focused tab label>` through Herdr's CLI. It defaults to `true`.
+`set_window_title` updates the title of the foreground terminal client through
+Herdr's CLI. It defaults to `true`. By default, `append_internal_tab_title`
+includes the focused pane's internal terminal title, producing
+`Herdr · <focused tab label> · <internal title>`. Set it to `false` to use only
+`Herdr · <focused tab label>`.
 
 `windows_process_detection` enables the Windows process-tree fallback and
 defaults to `true`. `windows_agent_detection` enables the Windows fallback to
