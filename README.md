@@ -53,6 +53,7 @@ idle_shell_separator = " ❯ "
 shorten_home_directory = true
 set_window_title = true
 windows_process_detection = true
+windows_agent_detection = true
 ```
 
 `interval_seconds` controls the fallback poll. Normal workspace, tab, and pane
@@ -82,14 +83,24 @@ same prefix. It defaults to `true`.
 `Herdr · <focused tab label>` through Herdr's CLI. It defaults to `true`.
 
 `windows_process_detection` enables the Windows process-tree fallback and
-defaults to `true`. It has no effect on Unix platforms.
+defaults to `true`. `windows_agent_detection` enables the Windows fallback to
+Herdr's semantic pane `agent` metadata, and also defaults to `true`. The latter
+is useful for MSYS-launched agents whose process tree becomes disconnected from
+the pane shell. Both options have no effect on Unix platforms.
 
 On Windows, Herdr can report only the pane shell for ordinary foreground
 programs. When that happens, the plugin takes one native process snapshot and
 walks descendants of Herdr's `shell_pid`, passing through shells and known
 launch wrappers. It uses the first program on a branch only when all candidate
-branches resolve to the same executable; ambiguous trees remain labeled as an
-idle shell. This fallback does not inspect or parse terminal titles.
+branches resolve to the same executable.
+
+MSYS launch wrappers can exit while a native agent such as Pi continues
+running, disconnecting the agent from the pane shell's Windows process tree. If
+no foreground program can be found, the plugin uses Herdr's semantic `agent`
+metadata before falling back to the idle-shell label. A discovered foreground
+program still wins over the agent label. These Windows fallbacks do not inspect
+or parse terminal titles; ambiguous process trees without agent metadata remain
+labeled as idle shells.
 
 ## Actions
 

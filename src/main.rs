@@ -68,6 +68,7 @@ struct Pane {
     focused: bool,
     cwd: Option<String>,
     foreground_cwd: Option<String>,
+    agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +144,7 @@ struct PluginConfig {
     shorten_home_directory: bool,
     set_window_title: bool,
     windows_process_detection: bool,
+    windows_agent_detection: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -156,6 +158,7 @@ struct RawPluginConfig {
     show_idle_shell: Option<bool>,
     set_window_title: Option<bool>,
     windows_process_detection: Option<bool>,
+    windows_agent_detection: Option<bool>,
 }
 
 impl Default for PluginConfig {
@@ -169,6 +172,7 @@ impl Default for PluginConfig {
             shorten_home_directory: false,
             set_window_title: true,
             windows_process_detection: true,
+            windows_agent_detection: true,
         }
     }
 }
@@ -463,6 +467,7 @@ fn status(paths: &Paths) -> Result<()> {
         "shorten_home_directory": config.shorten_home_directory,
         "set_window_title": config.set_window_title,
         "windows_process_detection": config.windows_process_detection,
+        "windows_agent_detection": config.windows_agent_detection,
         "config_dir": paths.config_dir,
         "config_file": paths.config_file,
         "state_dir": paths.state_dir,
@@ -606,11 +611,13 @@ fn desired_label_for_pane(
     process_snapshot: &PlatformProcessSnapshot,
 ) -> Result<String> {
     let process_info = pane_process_info(&pane.pane_id)?;
-    if let Some(process) = select_foreground_process(&process_info.processes) {
-        return Ok(sanitize_label(&process_label(process)));
-    }
-    if let Some(process) = platform_foreground_process(process_info.shell_pid, process_snapshot) {
-        return Ok(sanitize_label(&process_label(&process)));
+    if let Some(label) = detected_foreground_label(
+        &process_info,
+        pane.agent.as_deref(),
+        process_snapshot,
+        config.windows_agent_detection,
+    ) {
+        return Ok(sanitize_label(&label));
     }
 
     let cwd = pane
@@ -651,6 +658,28 @@ fn strip_tab_number_prefix(label: &str) -> &str {
     } else {
         label
     }
+}
+
+fn detected_foreground_label(
+    process_info: &PaneProcessInfo,
+    agent: Option<&str>,
+    process_snapshot: &PlatformProcessSnapshot,
+    agent_detection_enabled: bool,
+) -> Option<String> {
+    if let Some(process) = select_foreground_process(&process_info.processes) {
+        return Some(process_label(process));
+    }
+    if let Some(process) = platform_foreground_process(process_info.shell_pid, process_snapshot) {
+        return Some(process_label(&process));
+    }
+
+    // MSYS launch wrappers can exit after starting a native Windows agent,
+    // leaving the agent's process tree disconnected from the pane shell.
+    // Herdr's agent association remains the authoritative pane-level signal.
+    agent_detection_enabled
+        .then(|| platform_agent_label(agent))
+        .flatten()
+        .map(str::to_string)
 }
 
 fn select_foreground_process(processes: &[ForegroundProcess]) -> Option<&ForegroundProcess> {
@@ -728,6 +757,16 @@ fn is_internal_helper_process(process: &ForegroundProcess) -> bool {
         .trim_end_matches(".bat")
         .to_lowercase();
     matches!(name.as_str(), "exec_bridge")
+}
+
+#[cfg(windows)]
+fn platform_agent_label(agent: Option<&str>) -> Option<&str> {
+    agent.map(str::trim).filter(|agent| !agent.is_empty())
+}
+
+#[cfg(not(windows))]
+fn platform_agent_label(_agent: Option<&str>) -> Option<&str> {
+    None
 }
 
 #[cfg(not(windows))]
@@ -1074,6 +1113,7 @@ fn list_panes() -> Result<Vec<Pane>> {
                 focused: optional_bool(pane, "focused"),
                 cwd: optional_string(pane, "cwd"),
                 foreground_cwd: optional_string(pane, "foreground_cwd"),
+                agent: optional_string(pane, "agent"),
             })
         })
         .collect()
@@ -1252,6 +1292,9 @@ fn parse_plugin_config(text: &str) -> Result<PluginConfig> {
     }
     if let Some(windows_process_detection) = raw.windows_process_detection {
         config.windows_process_detection = windows_process_detection;
+    }
+    if let Some(windows_agent_detection) = raw.windows_agent_detection {
+        config.windows_agent_detection = windows_agent_detection;
     }
     Ok(config)
 }
@@ -1630,6 +1673,7 @@ mod tests {
         assert!(!PluginConfig::default().shorten_home_directory);
         assert!(PluginConfig::default().set_window_title);
         assert!(PluginConfig::default().windows_process_detection);
+        assert!(PluginConfig::default().windows_agent_detection);
         assert_eq!(parse_plugin_config("").unwrap().directory_depth, 1);
         assert_eq!(
             parse_plugin_config("directory_depth = 2")
@@ -1674,6 +1718,7 @@ mod tests {
                     shorten_home_directory: false,
                     set_window_title: false,
                     windows_process_detection: true,
+                    windows_agent_detection: true,
                 },
             ),
             "3:me/project"
@@ -1691,6 +1736,7 @@ mod tests {
                     shorten_home_directory: false,
                     set_window_title: false,
                     windows_process_detection: true,
+                    windows_agent_detection: true,
                 },
             ),
             "me/project"
@@ -1711,6 +1757,11 @@ mod tests {
             !parse_plugin_config("windows_process_detection = false")
                 .unwrap()
                 .windows_process_detection
+        );
+        assert!(
+            !parse_plugin_config("windows_agent_detection = false")
+                .unwrap()
+                .windows_agent_detection
         );
     }
 
@@ -1752,6 +1803,7 @@ mod tests {
             shorten_home_directory: false,
             set_window_title: false,
             windows_process_detection: true,
+            windows_agent_detection: true,
         };
         let manual = Tab {
             tab_id: "w1:t2".into(),
@@ -1951,6 +2003,47 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_agent_metadata_fills_disconnected_process_tree() {
+        let process_info = PaneProcessInfo {
+            shell_pid: Some(10),
+            processes: vec![process("fish.exe", Some("fish.exe"), &["fish.exe"])],
+        };
+        let snapshot = PlatformProcessSnapshot {
+            entries: vec![windows_entry(10, 1, "fish.exe")],
+        };
+
+        assert_eq!(
+            detected_foreground_label(&process_info, Some("pi"), &snapshot, true),
+            Some("pi".into())
+        );
+        assert_eq!(
+            detected_foreground_label(&process_info, Some("pi"), &snapshot, false),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_foreground_program_wins_over_agent_metadata() {
+        let process_info = PaneProcessInfo {
+            shell_pid: Some(10),
+            processes: vec![process("fish.exe", Some("fish.exe"), &["fish.exe"])],
+        };
+        let snapshot = PlatformProcessSnapshot {
+            entries: vec![
+                windows_entry(10, 1, "fish.exe"),
+                windows_entry(20, 10, "lazygit.exe"),
+            ],
+        };
+
+        assert_eq!(
+            detected_foreground_label(&process_info, Some("pi"), &snapshot, true),
+            Some("lazygit".into())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_fallback_walks_shells_and_stops_at_first_program() {
         let entries = vec![
             windows_entry(10, 1, "fish.exe"),
@@ -2001,6 +2094,7 @@ mod tests {
                 focused: false,
                 cwd: None,
                 foreground_cwd: None,
+                agent: None,
             },
             Pane {
                 pane_id: "w1:p1".into(),
@@ -2008,6 +2102,7 @@ mod tests {
                 focused: true,
                 cwd: None,
                 foreground_cwd: None,
+                agent: None,
             },
         ];
         let grouped = group_panes_by_tab(panes);
