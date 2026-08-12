@@ -52,7 +52,7 @@ idle_label_mode = "shell"
 idle_shell_separator = " ❯ "
 shorten_home_directory = true
 set_window_title = true
-append_internal_tab_title = true
+terminal_title_template = "[Herdr {tab_label}] {internal_title}"
 windows_process_detection = true
 windows_agent_detection = true
 ```
@@ -81,10 +81,22 @@ defaults to ` ❯ `.
 same prefix. It defaults to `true`.
 
 `set_window_title` updates the title of the foreground terminal client through
-Herdr's CLI. It defaults to `true`. By default, `append_internal_tab_title`
-includes the focused pane's internal terminal title, producing
-`Herdr · <focused tab label> · <internal title>`. Set it to `false` to use only
-`Herdr · <focused tab label>`.
+Herdr's CLI. It defaults to `true`.
+
+`terminal_title_template` controls that title. It defaults to
+`[Herdr {tab_label}] {internal_title}`. Supported placeholders are:
+
+- `{tab_label}` — plugin-managed tab label
+- `{internal_title}` — focused pane's terminal title
+- `{tab_number}` — visual tab number
+- `{workspace}` — workspace label
+- `{cwd}` — focused pane's current working directory
+- `{directory}` — formatted current directory using the directory settings
+- `{process}` — detected foreground process
+- `{agent}` — pane agent metadata
+
+Unavailable values become empty strings. Use doubled braces for literal braces,
+and unknown or malformed placeholders make the configuration invalid.
 
 `windows_process_detection` enables the Windows process-tree fallback and
 defaults to `true`. `windows_agent_detection` enables the Windows fallback to
