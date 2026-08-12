@@ -10,6 +10,17 @@ $Version = $VersionMatch.Matches[0].Groups[1].Value
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
+function Stop-ExistingBinary {
+    $processName = [System.IO.Path]::GetFileNameWithoutExtension($Bin)
+    $processes = @(Get-Process -Name $processName -ErrorAction SilentlyContinue)
+    if ($processes.Count -eq 0) {
+        return
+    }
+
+    $processes | Stop-Process -Force
+    $processes | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+}
+
 $asset = switch ($env:PROCESSOR_ARCHITECTURE) {
     "AMD64" { "herdr-tab-title-x86_64-pc-windows-msvc.exe"; break }
     # ARM64 falls back to a local build until a matching release asset is published.
@@ -22,6 +33,7 @@ if ($asset -and (Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue)) {
     $tmp = "$Bin.download"
     try {
         Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmp
+        Stop-ExistingBinary
         Move-Item -Force $tmp $Bin
         Write-Host "installed $asset"
         exit 0
@@ -41,6 +53,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "cargo build failed with exit code $LASTEXITCODE"
     }
+    Stop-ExistingBinary
     Copy-Item -Force "target\release\herdr-tab-title.exe" $Bin
     Write-Host "built $Bin"
 } finally {
