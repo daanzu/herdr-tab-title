@@ -137,7 +137,7 @@ impl Default for PluginConfig {
         Self {
             interval_seconds: DEFAULT_INTERVAL_SECS,
             directory_depth: DEFAULT_DIRECTORY_DEPTH,
-            show_tab_number: false,
+            show_tab_number: true,
             idle_label_mode: IdleLabelMode::Shell,
             idle_shell_separator: IDLE_SHELL_SEPARATOR.to_string(),
             shorten_home_directory: false,
@@ -1407,7 +1407,7 @@ mod tests {
     fn plugin_config_controls_directory_depth() {
         assert_eq!(PluginConfig::default().interval_seconds, 10);
         assert_eq!(PluginConfig::default().directory_depth, 1);
-        assert!(!PluginConfig::default().show_tab_number);
+        assert!(PluginConfig::default().show_tab_number);
         assert_eq!(
             PluginConfig::default().idle_label_mode,
             IdleLabelMode::Shell
