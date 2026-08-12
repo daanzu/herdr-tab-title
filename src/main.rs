@@ -104,6 +104,30 @@ struct ForegroundProcess {
     cmdline: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PaneProcessInfo {
+    shell_pid: Option<u32>,
+    processes: Vec<ForegroundProcess>,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsProcessEntry {
+    pid: u32,
+    parent_pid: u32,
+    name: String,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Default)]
+struct PlatformProcessSnapshot {
+    entries: Vec<WindowsProcessEntry>,
+}
+
+#[cfg(not(windows))]
+#[derive(Debug, Default)]
+struct PlatformProcessSnapshot;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LabelState {
     labels: BTreeMap<String, String>,
@@ -118,6 +142,7 @@ struct PluginConfig {
     idle_shell_separator: String,
     shorten_home_directory: bool,
     set_window_title: bool,
+    windows_process_detection: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -130,6 +155,7 @@ struct RawPluginConfig {
     shorten_home_directory: Option<bool>,
     show_idle_shell: Option<bool>,
     set_window_title: Option<bool>,
+    windows_process_detection: Option<bool>,
 }
 
 impl Default for PluginConfig {
@@ -142,6 +168,7 @@ impl Default for PluginConfig {
             idle_shell_separator: IDLE_SHELL_SEPARATOR.to_string(),
             shorten_home_directory: false,
             set_window_title: true,
+            windows_process_detection: true,
         }
     }
 }
@@ -435,6 +462,7 @@ fn status(paths: &Paths) -> Result<()> {
         "idle_shell_separator": config.idle_shell_separator,
         "shorten_home_directory": config.shorten_home_directory,
         "set_window_title": config.set_window_title,
+        "windows_process_detection": config.windows_process_detection,
         "config_dir": paths.config_dir,
         "config_file": paths.config_file,
         "state_dir": paths.state_dir,
@@ -447,6 +475,14 @@ fn status(paths: &Paths) -> Result<()> {
 fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Result<usize> {
     let tabs = list_tabs()?;
     let panes = list_panes()?;
+    // Process-tree inference is only a Windows fallback. If the native
+    // snapshot is unavailable, keep using Herdr's process information rather
+    // than failing the entire title sync.
+    let process_snapshot = if config.windows_process_detection {
+        platform_process_snapshot().unwrap_or_default()
+    } else {
+        PlatformProcessSnapshot::default()
+    };
     let panes_by_tab = group_panes_by_tab(panes);
     let observed_tab_ids = tabs
         .iter()
@@ -468,7 +504,7 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
         let manage = should_manage_tab(&tab, state, force);
         if !manage {
             state.labels.remove(&tab.tab_id);
-            if let Some(desired) = desired_label_for_manual_tab(&tab, &config) {
+            if let Some(desired) = desired_label_for_manual_tab(&tab, config) {
                 rename_tab(&tab.tab_id, &desired)
                     .with_context(|| format!("rename manual tab {} to {desired:?}", tab.tab_id))?;
                 if tab.focused {
@@ -481,7 +517,7 @@ fn sync_once(config: &PluginConfig, state: &mut LabelState, force: bool) -> Resu
         let Some(source_pane) = select_tab_source_pane(&tab, tab_panes)? else {
             continue;
         };
-        let desired = desired_label_for_tab(&tab, source_pane, &config)?;
+        let desired = desired_label_for_tab(&tab, source_pane, config, &process_snapshot)?;
         if desired.is_empty() {
             continue;
         }
@@ -542,8 +578,13 @@ fn select_tab_source_pane<'a>(tab: &Tab, panes: &'a [Pane]) -> Result<Option<&'a
     Ok(Some(first))
 }
 
-fn desired_label_for_tab(tab: &Tab, pane: &Pane, config: &PluginConfig) -> Result<String> {
-    let base = desired_label_for_pane(pane, config)?;
+fn desired_label_for_tab(
+    tab: &Tab,
+    pane: &Pane,
+    config: &PluginConfig,
+    process_snapshot: &PlatformProcessSnapshot,
+) -> Result<String> {
+    let base = desired_label_for_pane(pane, config, process_snapshot)?;
     Ok(format_tab_label(tab.display_number, &base, config))
 }
 
@@ -559,10 +600,17 @@ fn desired_label_for_manual_tab(tab: &Tab, config: &PluginConfig) -> Option<Stri
     (desired != tab.label).then_some(desired)
 }
 
-fn desired_label_for_pane(pane: &Pane, config: &PluginConfig) -> Result<String> {
-    let processes = pane_process_info(&pane.pane_id)?;
-    if let Some(process) = select_foreground_process(&processes) {
+fn desired_label_for_pane(
+    pane: &Pane,
+    config: &PluginConfig,
+    process_snapshot: &PlatformProcessSnapshot,
+) -> Result<String> {
+    let process_info = pane_process_info(&pane.pane_id)?;
+    if let Some(process) = select_foreground_process(&process_info.processes) {
         return Ok(sanitize_label(&process_label(process)));
+    }
+    if let Some(process) = platform_foreground_process(process_info.shell_pid, process_snapshot) {
+        return Ok(sanitize_label(&process_label(&process)));
     }
 
     let cwd = pane
@@ -577,7 +625,7 @@ fn desired_label_for_pane(pane: &Pane, config: &PluginConfig) -> Result<String> 
     };
     let directory =
         directory_label_with_home(cwd, config.directory_depth, home.as_deref(), cfg!(windows));
-    let shell = select_idle_shell_process(&processes).map(process_label);
+    let shell = select_idle_shell_process(&process_info.processes).map(process_label);
     Ok(format_idle_shell_label(
         &directory,
         shell.as_deref(),
@@ -680,6 +728,160 @@ fn is_internal_helper_process(process: &ForegroundProcess) -> bool {
         .trim_end_matches(".bat")
         .to_lowercase();
     matches!(name.as_str(), "exec_bridge")
+}
+
+#[cfg(not(windows))]
+fn platform_process_snapshot() -> Result<PlatformProcessSnapshot> {
+    Ok(PlatformProcessSnapshot)
+}
+
+#[cfg(not(windows))]
+fn platform_foreground_process(
+    _shell_pid: Option<u32>,
+    _snapshot: &PlatformProcessSnapshot,
+) -> Option<ForegroundProcess> {
+    None
+}
+
+#[cfg(windows)]
+fn platform_process_snapshot() -> Result<PlatformProcessSnapshot> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error()).context("snapshot Windows processes");
+    }
+
+    let result = (|| {
+        let mut raw = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if unsafe { Process32FirstW(handle, &mut raw) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("read Windows process snapshot");
+        }
+
+        let mut entries = Vec::new();
+        loop {
+            let name_len = raw
+                .szExeFile
+                .iter()
+                .position(|ch| *ch == 0)
+                .unwrap_or(raw.szExeFile.len());
+            entries.push(WindowsProcessEntry {
+                pid: raw.th32ProcessID,
+                parent_pid: raw.th32ParentProcessID,
+                name: String::from_utf16_lossy(&raw.szExeFile[..name_len]),
+            });
+            if unsafe { Process32NextW(handle, &mut raw) } == 0 {
+                break;
+            }
+        }
+        Ok(PlatformProcessSnapshot { entries })
+    })();
+
+    unsafe {
+        CloseHandle(handle);
+    }
+    result
+}
+
+#[cfg(windows)]
+fn platform_foreground_process(
+    shell_pid: Option<u32>,
+    snapshot: &PlatformProcessSnapshot,
+) -> Option<ForegroundProcess> {
+    let shell_pid = shell_pid?;
+    let entry = select_windows_process_candidate(shell_pid, &snapshot.entries)?;
+    Some(ForegroundProcess {
+        name: entry.name.clone(),
+        argv0: Some(entry.name.clone()),
+        argv: vec![entry.name.clone()],
+        cmdline: None,
+    })
+}
+
+#[cfg(windows)]
+fn select_windows_process_candidate(
+    shell_pid: u32,
+    entries: &[WindowsProcessEntry],
+) -> Option<&WindowsProcessEntry> {
+    if !entries.iter().any(|entry| entry.pid == shell_pid) {
+        return None;
+    }
+
+    let mut children = HashMap::<u32, Vec<&WindowsProcessEntry>>::new();
+    for entry in entries {
+        children.entry(entry.parent_pid).or_default().push(entry);
+    }
+
+    let mut pending = vec![shell_pid];
+    let mut visited = HashSet::from([shell_pid]);
+    let mut candidates = Vec::new();
+    while let Some(parent_pid) = pending.pop() {
+        for child in children.get(&parent_pid).into_iter().flatten() {
+            if !visited.insert(child.pid) {
+                continue;
+            }
+            if is_transparent_windows_process(&child.name) {
+                pending.push(child.pid);
+            } else {
+                // This is the first meaningful process on this branch. Do not
+                // inspect its children: they may be background workers or
+                // short-lived commands launched by the foreground program.
+                candidates.push(*child);
+            }
+        }
+    }
+
+    let names = candidates
+        .iter()
+        .map(|entry| normalized_windows_process_name(&entry.name))
+        .collect::<HashSet<_>>();
+    if names.len() == 1 {
+        candidates.into_iter().next()
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn is_transparent_windows_process(name: &str) -> bool {
+    let process = ForegroundProcess {
+        name: name.to_string(),
+        argv0: Some(name.to_string()),
+        argv: Vec::new(),
+        cmdline: None,
+    };
+    if is_shell_process(&process) || is_internal_helper_process(&process) {
+        return true;
+    }
+
+    matches!(
+        normalized_windows_process_name(name).as_str(),
+        "conhost" | "openconsole" | "winpty" | "winpty-agent" | "env"
+    )
+}
+
+#[cfg(windows)]
+fn normalized_windows_process_name(name: &str) -> String {
+    let basename = name
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(name)
+        .trim();
+    let mut normalized = basename.to_ascii_lowercase();
+    for suffix in [".exe", ".cmd", ".bat"] {
+        if normalized.ends_with(suffix) {
+            normalized.truncate(normalized.len() - suffix.len());
+            break;
+        }
+    }
+    normalized
 }
 
 fn directory_label(path: &str, depth: usize) -> String {
@@ -885,14 +1087,15 @@ fn layout_focused_pane(pane_id: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("pane layout response missing focused_pane_id"))
 }
 
-fn pane_process_info(pane_id: &str) -> Result<Vec<ForegroundProcess>> {
+fn pane_process_info(pane_id: &str) -> Result<PaneProcessInfo> {
     let json = herdr_json(&["pane", "process-info", "--pane", pane_id])?;
-    let processes = json
-        .pointer("/result/process_info/foreground_processes")
+    let info = json
+        .pointer("/result/process_info")
+        .ok_or_else(|| anyhow!("process-info response missing process_info"))?;
+    let processes = info
+        .get("foreground_processes")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("process-info response missing foreground_processes"))?;
-
-    processes
+        .ok_or_else(|| anyhow!("process-info response missing foreground_processes"))?
         .iter()
         .map(|process| {
             Ok(ForegroundProcess {
@@ -911,7 +1114,15 @@ fn pane_process_info(pane_id: &str) -> Result<Vec<ForegroundProcess>> {
                 cmdline: optional_string(process, "cmdline"),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(PaneProcessInfo {
+        shell_pid: info
+            .get("shell_pid")
+            .and_then(Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok()),
+        processes,
+    })
 }
 
 fn rename_tab(tab_id: &str, label: &str) -> Result<()> {
@@ -1038,6 +1249,9 @@ fn parse_plugin_config(text: &str) -> Result<PluginConfig> {
     }
     if let Some(set_window_title) = raw.set_window_title {
         config.set_window_title = set_window_title;
+    }
+    if let Some(windows_process_detection) = raw.windows_process_detection {
+        config.windows_process_detection = windows_process_detection;
     }
     Ok(config)
 }
@@ -1415,6 +1629,7 @@ mod tests {
         assert_eq!(PluginConfig::default().idle_shell_separator, " ❯ ");
         assert!(!PluginConfig::default().shorten_home_directory);
         assert!(PluginConfig::default().set_window_title);
+        assert!(PluginConfig::default().windows_process_detection);
         assert_eq!(parse_plugin_config("").unwrap().directory_depth, 1);
         assert_eq!(
             parse_plugin_config("directory_depth = 2")
@@ -1458,6 +1673,7 @@ mod tests {
                     idle_shell_separator: " ❯ ".into(),
                     shorten_home_directory: false,
                     set_window_title: false,
+                    windows_process_detection: true,
                 },
             ),
             "3:me/project"
@@ -1474,6 +1690,7 @@ mod tests {
                     idle_shell_separator: " ❯ ".into(),
                     shorten_home_directory: false,
                     set_window_title: false,
+                    windows_process_detection: true,
                 },
             ),
             "me/project"
@@ -1489,6 +1706,11 @@ mod tests {
             parse_plugin_config("set_window_title = true")
                 .unwrap()
                 .set_window_title
+        );
+        assert!(
+            !parse_plugin_config("windows_process_detection = false")
+                .unwrap()
+                .windows_process_detection
         );
     }
 
@@ -1529,6 +1751,7 @@ mod tests {
             idle_shell_separator: " ❯ ".into(),
             shorten_home_directory: false,
             set_window_title: false,
+            windows_process_detection: true,
         };
         let manual = Tab {
             tab_id: "w1:t2".into(),
@@ -1705,6 +1928,68 @@ mod tests {
             focused: false,
         };
         assert!(should_manage_tab(&tab, &LabelState::default(), false));
+    }
+
+    #[cfg(windows)]
+    fn windows_entry(pid: u32, parent_pid: u32, name: &str) -> WindowsProcessEntry {
+        WindowsProcessEntry {
+            pid,
+            parent_pid,
+            name: name.into(),
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_snapshot_contains_current_process() {
+        let snapshot = platform_process_snapshot().unwrap();
+        assert!(snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.pid == std::process::id()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fallback_walks_shells_and_stops_at_first_program() {
+        let entries = vec![
+            windows_entry(10, 1, "fish.exe"),
+            windows_entry(20, 10, "fish.exe"),
+            windows_entry(30, 20, "fish.exe"),
+            windows_entry(35, 30, "env.exe"),
+            windows_entry(40, 35, "lazygit.exe"),
+            windows_entry(50, 40, "lazygit.exe"),
+            windows_entry(60, 50, "git.exe"),
+        ];
+
+        let selected = select_windows_process_candidate(10, &entries).unwrap();
+        assert_eq!(selected.pid, 40);
+        assert_eq!(normalized_windows_process_name(&selected.name), "lazygit");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fallback_rejects_ambiguous_program_branches() {
+        let entries = vec![
+            windows_entry(10, 1, "fish.exe"),
+            windows_entry(20, 10, "server.exe"),
+            windows_entry(30, 10, "lazygit.exe"),
+        ];
+
+        assert!(select_windows_process_candidate(10, &entries).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fallback_accepts_equivalent_program_branches() {
+        let entries = vec![
+            windows_entry(10, 1, "fish.exe"),
+            windows_entry(20, 10, "LAZYGIT.EXE"),
+            windows_entry(30, 10, "lazygit.exe"),
+        ];
+
+        let selected = select_windows_process_candidate(10, &entries).unwrap();
+        assert_eq!(normalized_windows_process_name(&selected.name), "lazygit");
     }
 
     #[test]

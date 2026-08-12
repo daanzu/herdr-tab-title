@@ -52,6 +52,7 @@ idle_label_mode = "shell"
 idle_shell_separator = " ❯ "
 shorten_home_directory = true
 set_window_title = true
+windows_process_detection = true
 ```
 
 `interval_seconds` controls the fallback poll. Normal workspace, tab, and pane
@@ -79,6 +80,16 @@ same prefix. It defaults to `true`.
 
 `set_window_title` updates the title of the foreground terminal client to
 `Herdr · <focused tab label>` through Herdr's CLI. It defaults to `true`.
+
+`windows_process_detection` enables the Windows process-tree fallback and
+defaults to `true`. It has no effect on Unix platforms.
+
+On Windows, Herdr can report only the pane shell for ordinary foreground
+programs. When that happens, the plugin takes one native process snapshot and
+walks descendants of Herdr's `shell_pid`, passing through shells and known
+launch wrappers. It uses the first program on a branch only when all candidate
+branches resolve to the same executable; ambiguous trees remain labeled as an
+idle shell. This fallback does not inspect or parse terminal titles.
 
 ## Actions
 
