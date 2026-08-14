@@ -173,5 +173,6 @@ herdr plugin action invoke daanzu.tab-title.start-windows
 
 Local `plugin link` does not run build steps. Run the platform-specific build
 script (`scripts/install-binary.sh` or `scripts/install-binary.ps1`) before
-linking, or build and copy the binary manually as above. Windows releases use
-`herdr-tab-title-x86_64-pc-windows-msvc.exe`.
+linking, or build and copy the binary manually as above. If the watcher is
+already running, the build scripts stop it, replace the binary, and start it
+again. Windows releases use `herdr-tab-title-x86_64-pc-windows-msvc.exe`.
