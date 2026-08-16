@@ -52,7 +52,7 @@ idle_label_mode = "shell"
 idle_shell_separator = " ❯ "
 shorten_home_directory = true
 set_window_title = true
-terminal_title_template = "[Herdr {tab_label}] {internal_title}"
+terminal_title_template = "[{hostname_uppercase} herdr {tab_label}] {internal_title}"
 windows_process_detection = true
 windows_agent_detection = true
 ```
@@ -84,8 +84,11 @@ same prefix. It defaults to `true`.
 Herdr's CLI. It defaults to `true`.
 
 `terminal_title_template` controls that title. It defaults to
-`[Herdr {tab_label}] {internal_title}`. Supported placeholders are:
+`[{hostname_uppercase} herdr {tab_label}] {internal_title}`. Supported placeholders are:
 
+- `{hostname}` — local machine hostname
+- `{hostname_lowercase}` — local machine hostname converted to lowercase
+- `{hostname_uppercase}` — local machine hostname converted to uppercase
 - `{tab_label}` — plugin-managed tab label
 - `{internal_title}` — focused pane's terminal title
 - `{tab_number}` — visual tab number

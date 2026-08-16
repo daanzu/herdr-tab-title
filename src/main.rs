@@ -19,7 +19,8 @@ const DEFAULT_DIRECTORY_DEPTH: usize = 1;
 const MAX_DIRECTORY_DEPTH: usize = 8;
 const LABEL_LIMIT: usize = 40;
 const IDLE_SHELL_SEPARATOR: &str = " ❯ ";
-const DEFAULT_TERMINAL_TITLE_TEMPLATE: &str = "[Herdr {tab_label}] {internal_title}";
+const DEFAULT_TERMINAL_TITLE_TEMPLATE: &str =
+    "[{hostname_uppercase} herdr {tab_label}] {internal_title}";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
@@ -1240,7 +1241,13 @@ fn set_window_title(
         };
         directory_label_with_home(cwd, config.directory_depth, home.as_deref(), cfg!(windows))
     });
+    let hostname = local_hostname();
+    let hostname_lowercase = hostname.as_deref().map(str::to_ascii_lowercase);
+    let hostname_uppercase = hostname.as_deref().map(str::to_ascii_uppercase);
     let context = WindowTitleContext {
+        hostname: hostname.as_deref(),
+        hostname_lowercase: hostname_lowercase.as_deref(),
+        hostname_uppercase: hostname_uppercase.as_deref(),
         tab_label,
         internal_title: pane.and_then(|pane| pane.internal_title.as_deref()),
         tab_number: tab.display_number,
@@ -1259,6 +1266,9 @@ fn set_window_title(
 }
 
 struct WindowTitleContext<'a> {
+    hostname: Option<&'a str>,
+    hostname_lowercase: Option<&'a str>,
+    hostname_uppercase: Option<&'a str>,
     tab_label: &'a str,
     internal_title: Option<&'a str>,
     tab_number: usize,
@@ -1308,6 +1318,9 @@ fn render_window_title(template: &str, context: &WindowTitleContext<'_>) -> Resu
 
 fn validate_window_title_template(template: &str) -> Result<()> {
     let context = WindowTitleContext {
+        hostname: None,
+        hostname_lowercase: None,
+        hostname_uppercase: None,
         tab_label: "",
         internal_title: None,
         tab_number: 0,
@@ -1326,6 +1339,9 @@ fn append_window_title_value(
     context: &WindowTitleContext<'_>,
 ) -> Result<()> {
     match placeholder {
+        "hostname" => title.push_str(context.hostname.unwrap_or_default()),
+        "hostname_lowercase" => title.push_str(context.hostname_lowercase.unwrap_or_default()),
+        "hostname_uppercase" => title.push_str(context.hostname_uppercase.unwrap_or_default()),
         "tab_label" => title.push_str(context.tab_label),
         "internal_title" => title.push_str(context.internal_title.unwrap_or_default()),
         "tab_number" => title.push_str(&context.tab_number.to_string()),
@@ -1337,6 +1353,20 @@ fn append_window_title_value(
         _ => bail!("unknown terminal_title_template placeholder {{{placeholder}}}"),
     }
     Ok(())
+}
+
+fn local_hostname() -> Option<String> {
+    let variables = if cfg!(windows) {
+        ["COMPUTERNAME", "HOSTNAME"]
+    } else {
+        ["HOSTNAME", "COMPUTERNAME"]
+    };
+    variables.into_iter().find_map(|variable| {
+        env::var(variable)
+            .ok()
+            .map(|hostname| hostname.trim().to_string())
+            .filter(|hostname| !hostname.is_empty())
+    })
 }
 
 fn foreground_process_name(
@@ -1975,6 +2005,9 @@ mod tests {
     #[test]
     fn window_title_template_expands_supported_placeholders() {
         let context = WindowTitleContext {
+            hostname: Some("WorkStation"),
+            hostname_lowercase: Some("workstation"),
+            hostname_uppercase: Some("WORKSTATION"),
             tab_label: "3:herdr-tab-title",
             internal_title: Some("π - herdr-tab-title"),
             tab_number: 3,
@@ -1986,15 +2019,15 @@ mod tests {
         };
         assert_eq!(
             render_window_title(DEFAULT_TERMINAL_TITLE_TEMPLATE, &context).unwrap(),
-            "[Herdr 3:herdr-tab-title] π - herdr-tab-title"
+            "[WORKSTATION herdr 3:herdr-tab-title] π - herdr-tab-title"
         );
         assert_eq!(
             render_window_title(
-                "{tab_number} {workspace} {cwd} {directory} {process} {agent}",
+                "{hostname} {hostname_lowercase} {hostname_uppercase} {tab_number} {workspace} {cwd} {directory} {process} {agent}",
                 &context,
             )
             .unwrap(),
-            "3 work /home/me/project ~/project pi pi"
+            "WorkStation workstation WORKSTATION 3 work /home/me/project ~/project pi pi"
         );
         assert!(render_window_title("{{Herdr}} {missing}", &context).is_err());
         assert!(render_window_title("{tab_label", &context).is_err());
