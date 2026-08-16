@@ -1357,7 +1357,7 @@ fn append_window_title_value(
     Ok(())
 }
 
-fn local_hostname() -> Option<String> {
+fn environment_hostname() -> Option<String> {
     let variables = if cfg!(windows) {
         ["COMPUTERNAME", "HOSTNAME"]
     } else {
@@ -1369,6 +1369,30 @@ fn local_hostname() -> Option<String> {
             .map(|hostname| hostname.trim().to_string())
             .filter(|hostname| !hostname.is_empty())
     })
+}
+
+#[cfg(unix)]
+fn local_hostname() -> Option<String> {
+    let mut buffer = [0u8; 256];
+    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+    if result == 0 {
+        let length = buffer
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(buffer.len());
+        if let Ok(hostname) = std::str::from_utf8(&buffer[..length]) {
+            let hostname = hostname.trim();
+            if !hostname.is_empty() {
+                return Some(hostname.to_string());
+            }
+        }
+    }
+    environment_hostname()
+}
+
+#[cfg(not(unix))]
+fn local_hostname() -> Option<String> {
+    environment_hostname()
 }
 
 fn foreground_process_name(
