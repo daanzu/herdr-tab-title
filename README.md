@@ -63,8 +63,9 @@ the next poll. The default fallback is `10` seconds.
 
 `directory_depth` controls how many trailing path components are shown when a
 pane is sitting at an idle shell. The default is `1`, so `/home/me/api` displays
-as `api`; `2` displays it as `me/api`. Foreground programs still win, so a pane
-running `vim` or `cargo` is titled `vim` or `cargo`.
+as `api`; `2` displays it as `me/api`. Detected agent names take precedence;
+otherwise foreground programs still win, so a pane running `vim` or `cargo` is
+titled `vim` or `cargo`.
 
 `idle_label_mode` controls idle-pane labels. It can be `directory` for `me/api`,
 `shell` for `bash`, or `directory_shell` for `me/api ❯ bash`. It defaults to
@@ -114,10 +115,10 @@ launch wrappers. It uses the first program on a branch only when all candidate
 branches resolve to the same executable.
 
 MSYS launch wrappers can exit while a native agent such as Pi continues
-running, disconnecting the agent from the pane shell's Windows process tree. If
-no foreground program can be found, the plugin uses Herdr's semantic `agent`
-metadata before falling back to the idle-shell label. A discovered foreground
-program still wins over the agent label. These Windows fallbacks do not inspect
+running, disconnecting the agent from the pane shell's Windows process tree.
+The plugin prefers Herdr's semantic `agent` metadata whenever it is available,
+then falls back to a discovered foreground program or the idle-shell label.
+These Windows fallbacks do not inspect
 or parse terminal titles; ambiguous process trees without agent metadata remain
 labeled as idle shells.
 

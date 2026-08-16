@@ -643,7 +643,7 @@ fn desired_label_for_pane(
     process_snapshot: &PlatformProcessSnapshot,
 ) -> Result<String> {
     let process_info = pane_process_info(&pane.pane_id)?;
-    if let Some(label) = detected_foreground_label(
+    if let Some(label) = detected_tab_label(
         &process_info,
         pane.agent.as_deref(),
         process_snapshot,
@@ -692,26 +692,28 @@ fn strip_tab_number_prefix(label: &str) -> &str {
     }
 }
 
-fn detected_foreground_label(
+fn detected_tab_label(
     process_info: &PaneProcessInfo,
     agent: Option<&str>,
     process_snapshot: &PlatformProcessSnapshot,
     agent_detection_enabled: bool,
 ) -> Option<String> {
+    // Prefer Herdr's semantic agent association whenever it is available. This
+    // keeps an agent tab labeled with the agent rather than an implementation
+    // process such as node or python.
+    if let Some(agent) = agent_detection_enabled
+        .then(|| platform_agent_label(agent))
+        .flatten()
+    {
+        return Some(agent.to_string());
+    }
     if let Some(process) = select_foreground_process(&process_info.processes) {
         return Some(process_label(process));
     }
     if let Some(process) = platform_foreground_process(process_info.shell_pid, process_snapshot) {
         return Some(process_label(&process));
     }
-
-    // MSYS launch wrappers can exit after starting a native Windows agent,
-    // leaving the agent's process tree disconnected from the pane shell.
-    // Herdr's agent association remains the authoritative pane-level signal.
-    agent_detection_enabled
-        .then(|| platform_agent_label(agent))
-        .flatten()
-        .map(str::to_string)
+    None
 }
 
 fn select_foreground_process(processes: &[ForegroundProcess]) -> Option<&ForegroundProcess> {
@@ -2266,18 +2268,18 @@ mod tests {
         };
 
         assert_eq!(
-            detected_foreground_label(&process_info, Some("pi"), &snapshot, true),
+            detected_tab_label(&process_info, Some("pi"), &snapshot, true),
             Some("pi".into())
         );
         assert_eq!(
-            detected_foreground_label(&process_info, Some("pi"), &snapshot, false),
+            detected_tab_label(&process_info, Some("pi"), &snapshot, false),
             None
         );
     }
 
     #[cfg(windows)]
     #[test]
-    fn windows_foreground_program_wins_over_agent_metadata() {
+    fn windows_agent_name_precedes_foreground_program() {
         let process_info = PaneProcessInfo {
             shell_pid: Some(10),
             processes: vec![process("fish.exe", Some("fish.exe"), &["fish.exe"])],
@@ -2290,7 +2292,11 @@ mod tests {
         };
 
         assert_eq!(
-            detected_foreground_label(&process_info, Some("pi"), &snapshot, true),
+            detected_tab_label(&process_info, Some("pi"), &snapshot, true),
+            Some("pi".into())
+        );
+        assert_eq!(
+            detected_tab_label(&process_info, Some("pi"), &snapshot, false),
             Some("lazygit".into())
         );
     }
