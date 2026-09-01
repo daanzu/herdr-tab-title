@@ -148,7 +148,7 @@ struct PluginConfig {
     set_window_title: bool,
     terminal_title_template: String,
     windows_process_detection: bool,
-    windows_agent_detection: bool,
+    agent_detection: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -164,7 +164,7 @@ struct RawPluginConfig {
     set_window_title: Option<bool>,
     terminal_title_template: Option<String>,
     windows_process_detection: Option<bool>,
-    windows_agent_detection: Option<bool>,
+    agent_detection: Option<bool>,
 }
 
 impl Default for PluginConfig {
@@ -179,7 +179,7 @@ impl Default for PluginConfig {
             set_window_title: true,
             terminal_title_template: DEFAULT_TERMINAL_TITLE_TEMPLATE.to_string(),
             windows_process_detection: true,
-            windows_agent_detection: true,
+            agent_detection: true,
         }
     }
 }
@@ -475,7 +475,7 @@ fn status(paths: &Paths) -> Result<()> {
         "set_window_title": config.set_window_title,
         "terminal_title_template": config.terminal_title_template,
         "windows_process_detection": config.windows_process_detection,
-        "windows_agent_detection": config.windows_agent_detection,
+        "agent_detection": config.agent_detection,
         "config_dir": paths.config_dir,
         "config_file": paths.config_file,
         "state_dir": paths.state_dir,
@@ -647,7 +647,7 @@ fn desired_label_for_pane(
         &process_info,
         pane.agent.as_deref(),
         process_snapshot,
-        config.windows_agent_detection,
+        config.agent_detection,
     ) {
         return Ok(sanitize_label(&label));
     }
@@ -702,7 +702,7 @@ fn detected_tab_label(
     // keeps an agent tab labeled with the agent rather than an implementation
     // process such as node or python.
     if let Some(agent) = agent_detection_enabled
-        .then(|| platform_agent_label(agent))
+        .then(|| agent_label(agent))
         .flatten()
     {
         return Some(agent.to_string());
@@ -793,14 +793,8 @@ fn is_internal_helper_process(process: &ForegroundProcess) -> bool {
     matches!(name.as_str(), "exec_bridge")
 }
 
-#[cfg(windows)]
-fn platform_agent_label(agent: Option<&str>) -> Option<&str> {
+fn agent_label(agent: Option<&str>) -> Option<&str> {
     agent.map(str::trim).filter(|agent| !agent.is_empty())
-}
-
-#[cfg(not(windows))]
-fn platform_agent_label(_agent: Option<&str>) -> Option<&str> {
-    None
 }
 
 #[cfg(not(windows))]
@@ -1522,8 +1516,8 @@ fn parse_plugin_config(text: &str) -> Result<PluginConfig> {
     if let Some(windows_process_detection) = raw.windows_process_detection {
         config.windows_process_detection = windows_process_detection;
     }
-    if let Some(windows_agent_detection) = raw.windows_agent_detection {
-        config.windows_agent_detection = windows_agent_detection;
+    if let Some(agent_detection) = raw.agent_detection {
+        config.agent_detection = agent_detection;
     }
     Ok(config)
 }
@@ -1906,7 +1900,7 @@ mod tests {
             DEFAULT_TERMINAL_TITLE_TEMPLATE
         );
         assert!(PluginConfig::default().windows_process_detection);
-        assert!(PluginConfig::default().windows_agent_detection);
+        assert!(PluginConfig::default().agent_detection);
         assert_eq!(parse_plugin_config("").unwrap().directory_depth, 1);
         assert_eq!(
             parse_plugin_config("directory_depth = 2")
@@ -1952,7 +1946,7 @@ mod tests {
                     set_window_title: false,
                     terminal_title_template: DEFAULT_TERMINAL_TITLE_TEMPLATE.into(),
                     windows_process_detection: true,
-                    windows_agent_detection: true,
+                    agent_detection: true,
                 },
             ),
             "3:me/project"
@@ -1971,7 +1965,7 @@ mod tests {
                     set_window_title: false,
                     terminal_title_template: DEFAULT_TERMINAL_TITLE_TEMPLATE.into(),
                     windows_process_detection: true,
-                    windows_agent_detection: true,
+                    agent_detection: true,
                 },
             ),
             "me/project"
@@ -2001,9 +1995,9 @@ mod tests {
                 .windows_process_detection
         );
         assert!(
-            !parse_plugin_config("windows_agent_detection = false")
+            !parse_plugin_config("agent_detection = false")
                 .unwrap()
-                .windows_agent_detection
+                .agent_detection
         );
     }
 
@@ -2082,7 +2076,7 @@ mod tests {
             set_window_title: false,
             terminal_title_template: DEFAULT_TERMINAL_TITLE_TEMPLATE.into(),
             windows_process_detection: true,
-            windows_agent_detection: true,
+            agent_detection: true,
         };
         let manual = Tab {
             tab_id: "w1:t2".into(),
@@ -2280,16 +2274,13 @@ mod tests {
             .any(|entry| entry.pid == std::process::id()));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_agent_metadata_fills_disconnected_process_tree() {
+    fn agent_metadata_precedes_foreground_process() {
         let process_info = PaneProcessInfo {
             shell_pid: Some(10),
             processes: vec![process("fish.exe", Some("fish.exe"), &["fish.exe"])],
         };
-        let snapshot = PlatformProcessSnapshot {
-            entries: vec![windows_entry(10, 1, "fish.exe")],
-        };
+        let snapshot = PlatformProcessSnapshot::default();
 
         assert_eq!(
             detected_tab_label(&process_info, Some("pi"), &snapshot, true),
