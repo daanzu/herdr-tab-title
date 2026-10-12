@@ -176,7 +176,7 @@ impl Default for PluginConfig {
             idle_label_mode: IdleLabelMode::Shell,
             idle_shell_separator: IDLE_SHELL_SEPARATOR.to_string(),
             shorten_home_directory: false,
-            set_window_title: true,
+            set_window_title: false,
             terminal_title_template: DEFAULT_TERMINAL_TITLE_TEMPLATE.to_string(),
             windows_process_detection: true,
             agent_detection: true,
@@ -1894,7 +1894,7 @@ mod tests {
         );
         assert_eq!(PluginConfig::default().idle_shell_separator, " ❯ ");
         assert!(!PluginConfig::default().shorten_home_directory);
-        assert!(PluginConfig::default().set_window_title);
+        assert!(!PluginConfig::default().set_window_title);
         assert_eq!(
             PluginConfig::default().terminal_title_template,
             DEFAULT_TERMINAL_TITLE_TEMPLATE
@@ -1977,6 +1977,12 @@ mod tests {
 
     #[test]
     fn plugin_config_controls_window_title() {
+        assert!(!parse_plugin_config("").unwrap().set_window_title);
+        assert!(
+            !parse_plugin_config("set_window_title = false")
+                .unwrap()
+                .set_window_title
+        );
         assert!(
             parse_plugin_config("set_window_title = true")
                 .unwrap()

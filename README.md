@@ -51,7 +51,7 @@ show_tab_number = true
 idle_label_mode = "shell"
 idle_shell_separator = " ❯ "
 shorten_home_directory = true
-set_window_title = true
+set_window_title = false
 terminal_title_template = "[{hostname_uppercase} herdr {tab_label}] {internal_title}"
 windows_process_detection = true
 agent_detection = true
@@ -82,9 +82,14 @@ defaults to ` ❯ `.
 same prefix. It defaults to `true`.
 
 `set_window_title` updates the title of the foreground terminal client through
-Herdr's CLI. It defaults to `true`.
+Herdr's CLI. It defaults to `false`; set it to `true` to enable terminal-title
+updates. Tab labels are managed regardless of this setting.
 
-`terminal_title_template` controls that title. It defaults to
+Herdr can set the terminal title itself using a template. Leave
+`set_window_title = false` to let Herdr handle the terminal title while this
+plugin manages tab labels.
+
+`terminal_title_template` controls the title when `set_window_title = true`. It defaults to
 `[{hostname_uppercase} herdr {tab_label}] {internal_title}`. Supported placeholders are:
 
 - `{hostname}` — local machine hostname
